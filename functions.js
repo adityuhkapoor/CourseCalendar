@@ -71,37 +71,36 @@ function get_days_off(academic_calendar, course) {
     const days_off = [];
     academic_calendar.forEach (day => {
         //catch early dismissals
-        if (day.event.includes("dismiss at"))
+        if (day.event.toLowerCase().includes("dismiss at"))
         {
             //regex to catch any time and pm/am
             const regex = /(0?[0-9]|1[0-9]|2[0-3]).*[A-Za-z]+/i;
             //get the part of the summary with relevant time information
             const day_summary = day.event.match(regex);
-            
+
             //fix formatting to be valid for converting time + am/pm to a date object
-            const rid_words = day_summary[0].split(":");
-            const split_time_and_am_pm = rid_words[0].split(" ");
-            const time = split_time_and_am_pm[0];
-            const am_or_pm = split_time_and_am_pm[1];
-            const time2 = "0" + time + ":00" + " " + am_or_pm.replace(".", "").toUpperCase();
-            const time3 = time2.replace(".", "");
-            //const fixed_date_format = fixed_date_format(day.startdate);
-            const date = day.startdate + " " + time3;
-            const early_dismissal = datestring_to_date_safari_safe(date);
+            const [hourPart, minuteAndAmpm] = day_summary[0].split(":"); // CHANGED FROM const rid_words = day_summary[0].split(":");
+            const [minutePart = "00", rawAmpm = "AM"] = (minuteAndAmpm || "").trim().split(" "); // CHANGED FROM const split_time_and_am_pm = rid_words[0].split(" ");
+            // REMOVED const time = split_time_and_am_pm[0];
+            const minute = minutePart.padStart(2, "0"); 
+            const ampm   = rawAmpm.replace(/\./g, "").toUpperCase();
+            const timeStr = `${hourPart.padStart(2, "0")}:${minute} ${ampm}`;
+
+            const earlyDismissal = datestring_to_date_safari_safe(`${day.startdate} ${timeStr}`); // CHANGED FROM const early_dismissal = datestring_to_date_safari_safe(date);
             
-            const course_start = datestring_to_date_safari_safe(day.startdate  + " " + course.STARTTIME);
+            const courseStart    = datestring_to_date_safari_safe(`${day.startdate} ${course.STARTTIME}`); // CHANGED FROM const course_start = datestring_to_date_safari_safe(day.startdate  + " " + course.STARTTIME);
             //if class.STARTTIME is after early dismissal time, then add course day/start time for that day to exclusions
-            if (course_start >= early_dismissal )
+            
+            if (courseStart >= earlyDismissal )
             {
-                days_off.push(datetime_obj_to_iso(datestring_to_date_safari_safe(day.startdate  + " " + course.STARTTIME)));
+                days_off.push(datetime_obj_to_iso(courseStart));
             }
             //it doesnt matter if the course meets that day or not as we are excluding it
             //ex: if its monday 1pm dismissal and we exclude a tuesday class, it doesnt change anythings
         }
         //get all single days off/breaks with multiple days off
-        else if (day.event.includes("No classes")) 
+        else if (day.event.toLowerCase().includes("no classes")) 
         {
-            
             const start_break = datestring_to_date_safari_safe(day.startdate + " " + course.STARTTIME);
             let end_break = new Date();
             if (day.enddate === ""){
@@ -114,8 +113,10 @@ function get_days_off(academic_calendar, course) {
             for (let date = start_break; date <= end_break; date.setDate(date.getDate() + 1))
             {
                 const day_to_push = new Date(date); //date is already a date obj
+                const iso = datetime_obj_to_iso(day_to_push);
                 // debugger;
-                days_off.push(datetime_obj_to_iso(day_to_push));
+                days_off.push(iso);
+                
             }
         } 
     });
@@ -144,7 +145,11 @@ function get_flop_days(academic_calendar, course, term_string) {
             }
             else if (day.event.includes("Monday classes meet (not Thursday classes)")) {
                 flop_days.push([flop_day, "MondayNotThursday"]);
-            } 
+            }
+            else if (day.event.includes("Monday classes meet (not Wednesday classes)")) {
+                flop_days.push([flop_day, "MondayNotWednesday"]);
+            }
+            
         }
     });
     return flop_days;
@@ -161,6 +166,8 @@ function get_flop_exclusions(course, flop_days) {
         } else if (flop_day[1] == "TuesdayNotThursday" && course.THURSDAY !== null) {
             flop_exclusions.push(flop_day[0]);
         } else if (flop_day[1] == "MondayNotThursday" && course.THURSDAY !== null) {
+            flop_exclusions.push(flop_day[0]);
+        } else if (flop_day[1] == "MondayNotWednesday" && course.WEDNESDAY !== null) {
             flop_exclusions.push(flop_day[0]);
         }
     });
@@ -179,6 +186,8 @@ function get_flop_inclusions(course, flop_days) {
         } else if (flop_day[1] == "TuesdayNotThursday" && course.TUESDAY !== null) {
             flop_inclusions.push(flop_day[0]);
         } else if (flop_day[1] == "MondayNotThursday" && course.MONDAY !== null) {
+            flop_inclusions.push(flop_day[0]);
+        } else if (flop_day[1] == "MondayNotWednesday" && course.MONDAY !== null) {
             flop_inclusions.push(flop_day[0]);
         }
     });
@@ -232,8 +241,7 @@ function get_base_recurrence(end_of_recurrence, byday, days_off, flop_exclusions
 
 // Generate event information for a specific course
 function generate_inperson_event_info(course, academic_calendar,term_string) {
-    // console.log(course);
-    
+
     if (course.ASYNCHRONOUS == true){ //if its an async class just skip it, it cant go on the Google Calendar anyways
         return null;
     }
@@ -280,7 +288,6 @@ function post_inperson_courses(banner_schedule, academic_calendar,term_string) {
         if (event){
             events.push(event);
         }
-        console.log(event);
     }
 
     post_to_gcal(events,true);
@@ -328,28 +335,27 @@ function generate_online_event_info(course){
     if (course.ASYNCHRONOUS == true){ //if its an async class just skip it, it cant go on the Google Calendar anyways
         return null;
     }
-    const start_date_begin = get_start_date_begin(course);
-    const start_date_end = get_start_date_end(course);
     const end_date_recurrence = get_end_date_recurrence(course);
     const byday = get_byday(course);
     
     const recurrence = ["RRULE:FREQ=WEEKLY;UNTIL=" +end_date_recurrence+ ";BYDAY=" + byday];  
 
-    
+    const event_id = course.TERM + course.CRN + (course.STARTTIME + course.ENDTIME).replace(/[^a-v0-9]/g, "");
     // //courses always start on Tuesday, so if its not a Tuesday course, make sure it isnt put on the first day
     // if (course.TUESDAY === null) {
     //     recurrence[1] = recurrence[1] + datetime_to_iso(new Date(course.START_DATE + " " + course.STARTTIME));
     // }
     const event = {
         summary: course.COURSE + " - " + course.BUILDING + " " + course.ROOM,
-        start_datetime: start_date_begin,
-        end_datetime: start_date_end,
+        start_datetime: datetime_obj_to_iso(datestring_to_date_safari_safe(course.START_DATE + " " + course.STARTTIME)),
+        end_datetime: datetime_obj_to_iso(datestring_to_date_safari_safe(course.START_DATE + " " + course.ENDTIME)),
         recurrence: recurrence,
-        event_id: course.TERM + course.CRN,
+        event_id: event_id,
         status: "confirmed",
         patch: true,
         //event_id is unique identifier, term + CRN should always be unique
     };
+
     return event;
 }
 
@@ -369,15 +375,35 @@ function post_online_courses(banner_schedule) {
 
 function post_online_calendar(academic_calendar, term_string,session_codes){ 
     const all_online_academic_calendar_days = []
+    if (term_string.includes("Fall")){
+        for (let i = 0; i < session_codes.length; i++){
+            session_codes[i] = "FA" + session_codes[i];
+        }
+            
+    }
+    if (term_string.includes("Spring")){
+        for (let i = 0; i < session_codes.length; i++){
+            session_codes[i] = "SP" + session_codes[i];
+        }
+            
+    }
     for (const day of academic_calendar){
-        if (day.term == term_string && session_codes.includes(day.session_code)){
-            const str = day.term + day.date + day.event; //get unique identifier
+        if (day.parentterm == term_string && session_codes.includes(day.code)){
+            const str = day.parentterm + day.date + day.type; //get unique identifier
             const rem_str = str.replace(/[^a-v0-9]/g, ""); //32bit hex encoding only accepts [a-v] and [0-9]
             const final_id = rem_str.toLowerCase(); //32bit hex encoding only supports lowercase letters
             
+            const title = day.type.replace(/_/g, " ");
+            
+            const finished_title = title.split(" ");
+
+            for (let i = 0; i < finished_title.length; i++) {
+                finished_title[i] = finished_title[i][0].toUpperCase() + finished_title[i].substr(1);
+            }
+            
             //need start_date and end_date added to google calendar api wrapper
             event = {
-                summary: day.event,
+                summary: finished_title.join(" "),
                 start_datetime: datetime_to_date_dashes(datestring_to_date_safari_safe(day.date)),
                 end_datetime: datetime_to_date_dashes(datestring_to_date_safari_safe(day.date)),
                 event_id: final_id,
@@ -397,12 +423,10 @@ function post_to_gcal(events,course){
     events.forEach(function (event) {
         promise = promise.then(function () {
             app.post('my_calendar', event, function (response) {//post event to calendar
-                if (course == true){console.log(response);}
                 try{ //needs to be in a try/catch b/c if theres no error, theres no error code and error will be thrown
                     if(response.error.code === 409){ //409 == requested identifier already exists on student calendar, so update it with newest information
                         app.alert("It seems that "+ event.summary + " is/was on your calendar. Let's see if we can fix something about it for you");
                         app.put('my_calendar', event, function (response) { 
-                            //console.log(response);//google calendar update call
                         });
                     }
                     else {
